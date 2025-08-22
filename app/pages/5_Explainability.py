@@ -1,4 +1,5 @@
 import streamlit as st
+from pathlib import Path
 import random
 import numpy as np
 import pandas as pd
@@ -7,24 +8,68 @@ import plotly.graph_objects as go
 
 # Flexible import to tolerate different run contexts
 try:
-    from app.utils import load_models, get_feature_schema, load_css, inject_css_block
+    from app.utils import (
+        load_models,
+        get_feature_schema,
+        load_css,
+        inject_css_block,
+        align_to_schema,
+        load_feature_defaults,
+        load_parquet_if_exists,
+        get_model_feature_schema,
+        unwrap_model,
+    )
 except Exception:
-    from utils import load_models, get_feature_schema, load_css, inject_css_block  # type: ignore
+    from utils import (  # type: ignore
+        load_models,
+        get_feature_schema,
+        load_css,
+        inject_css_block,
+        align_to_schema,
+        load_feature_defaults,
+        load_parquet_if_exists,
+        get_model_feature_schema,
+        unwrap_model,
+    )
 
-st.set_page_config(page_title="🧠 Explainability", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Explainability", page_icon=None, layout="wide")
 
 # Inject global CSS
 css = load_css()
 if css:
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    
+# Blur-to-focus text animation (reuse from main)
+blurtext_css = """
+.blur-reveal { display: inline-block; }
+.blur-reveal .w {
+  display: inline-block;
+  filter: blur(12px);
+  opacity: 0;
+  transform: translateY(0.4em);
+  animation: br-reveal 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  animation-delay: calc(var(--base, 0s) + (var(--i, 0) * var(--stagger, 0.06s)));
+}
+@keyframes br-reveal { to { filter: blur(0); opacity: 1; transform: translateY(0); } }
+"""
+st.markdown(f"<style>{blurtext_css}</style>", unsafe_allow_html=True)
 
-st.title("🧠 Model Explainability")
+st.markdown("""
+<div class="main-header">
+  <h1 style="margin-bottom:0.25rem;">
+    <span class="blur-reveal" style="--stagger:.06s; --base:.33s;">
+      <span class="w" style="--i:0">Model</span>
+      <span class="w" style="--i:1">Explainability</span>
+    </span>
+  </h1>
+</div>
+""", unsafe_allow_html=True)
 st.markdown('<div class="section-divider"><span class="label">Explain • Compare • Act</span></div>', unsafe_allow_html=True)
 
 st.markdown(
     """
     <div class="content-intro">
-        <h4>Interpret and trust your models</h4>
+        <h4><span class=\"material-symbols-outlined\">psychology</span> Interpret and trust your models</h4>
         <p>Explore feature contributions with SHAP values, visualize feature effects via PDP/ICE, and inspect top drivers of predictions.</p>
     </div>
     """,
@@ -48,7 +93,8 @@ with st.sidebar:
     uploaded = st.file_uploader("Optional: Upload data CSV for explainability", type=["csv"]) 
 
 mdl = models[model_name]
-feature_names = get_feature_schema(models)
+# Use model-specific schema when available
+model_schema = get_model_feature_schema(mdl) or get_feature_schema(models)
 
 # Load background data X
 X_source: pd.DataFrame
@@ -56,8 +102,9 @@ source_label = ""
 if uploaded is not None:
     try:
         df_in = pd.read_csv(uploaded)
-        if feature_names:
-            X_source = df_in.reindex(columns=feature_names).select_dtypes(include=[np.number]).fillna(0.0)
+        if model_schema:
+            defaults = load_feature_defaults(model_schema)
+            X_source = align_to_schema(df_in, model_schema, defaults)
         else:
             X_source = df_in.select_dtypes(include=[np.number]).fillna(0.0)
         source_label = "(uploaded)"
@@ -71,10 +118,17 @@ else:
 
 # If no data yet, synthesize a small dataframe based on known features
 if X_source.empty:
-    if feature_names:
-        rng = np.random.default_rng(42)
-        X_source = pd.DataFrame(rng.normal(size=(max(sample_size, 500), len(feature_names))), columns=feature_names)
-        source_label = "(Training Data)"
+    if model_schema:
+        # Try artifacts background first
+        raw = load_parquet_if_exists(Path.cwd() / "artifacts" / "merged_data.parquet")
+        if not raw.empty:
+            defaults = load_feature_defaults(model_schema)
+            X_source = align_to_schema(raw, model_schema, defaults)
+            source_label = "(artifacts/merged_data.parquet)"
+        else:
+            rng = np.random.default_rng(42)
+            X_source = pd.DataFrame(rng.normal(size=(max(sample_size, 500), len(model_schema))), columns=model_schema)
+            source_label = "(synthetic)"
     else:
         st.info("No feature schema detected. Upload a CSV with your model features to enable explainability.")
         st.stop()
@@ -100,25 +154,37 @@ inject_css_block(loader_css)
 
 # Helper: get model output function for probability of class 1 when available
 def predict_function(model, data: pd.DataFrame) -> np.ndarray:
+    core = unwrap_model(model)
+    # CatBoost: use Pool and ensure column order
     try:
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(data)
-            # binary or multi-class -> take class 1 if exists else max prob
+        import catboost  # type: ignore
+        is_cat = core.__class__.__module__.startswith("catboost")
+    except Exception:
+        catboost = None  # type: ignore
+        is_cat = False
+    try:
+        if is_cat:
+            pool = catboost.Pool(data, feature_names=list(data.columns))  # type: ignore
+            if hasattr(core, "predict_proba"):
+                proba = core.predict_proba(pool)
+                if proba.ndim == 2 and proba.shape[1] > 1:
+                    return proba[:, 1]
+                return proba.ravel()
+            preds = core.predict(pool)
+            return np.array(preds, dtype=float).ravel()
+        # scikit-learn / xgb / lgbm path
+        if hasattr(core, "predict_proba"):
+            proba = core.predict_proba(data)
             if proba.ndim == 2 and proba.shape[1] > 1:
                 return proba[:, 1]
             return proba.ravel()
-        elif hasattr(model, "decision_function"):
-            scores = model.decision_function(data)
+        if hasattr(core, "decision_function"):
+            scores = core.decision_function(data)
             return np.array(scores, dtype=float).ravel()
-        else:
-            preds = model.predict(data)
-            return np.array(preds, dtype=float).ravel()
+        preds = core.predict(data)
+        return np.array(preds, dtype=float).ravel()
     except Exception:
-        # Last resort: try predict on numpy
-        try:
-            return np.array(model.predict(data.values), dtype=float).ravel()
-        except Exception:
-            return np.zeros(len(data), dtype=float)
+        return np.zeros(len(data), dtype=float)
 
 # Helper: robust mean(|SHAP|) per feature across different SHAP shapes
 def mean_abs_shap_per_feature(shap_values_obj) -> np.ndarray:
@@ -197,9 +263,21 @@ loading_placeholder.markdown(
 try:
     with st.spinner("Summoning SHAP sprites… brewing explanations"):
         import shap
-        explainer = shap.Explainer(mdl, X, feature_names=list(X.columns))
-        shap_values = explainer(X)
-        explainer_name = explainer.__class__.__name__
+        core_model = unwrap_model(mdl)
+        # Prefer TreeExplainer for tree-based models like CatBoost
+        is_catboost = False
+        try:
+            is_catboost = core_model.__class__.__module__.startswith("catboost")
+        except Exception:
+            is_catboost = False
+        if is_catboost:
+            explainer = shap.TreeExplainer(core_model)
+            shap_values = explainer.shap_values(X)
+            explainer_name = "TreeExplainer(CatBoost)"
+        else:
+            explainer = shap.Explainer(core_model, X, feature_names=list(X.columns))
+            shap_values = explainer(X)
+            explainer_name = explainer.__class__.__name__
 finally:
     loading_placeholder.empty()
 if shap_values is None:
@@ -222,7 +300,7 @@ with tabs[0]:
     st.markdown(
         """
         <div class="feature-guidance">
-            <span class="icon">ℹ️</span>
+            <span class="material-symbols-outlined">info</span>
             <strong>What you are seeing</strong>
             <ul>
                 <li><b>SHAP</b> explains a prediction by assigning each feature a contribution (positive pushes prediction up; negative pushes it down).</li>
@@ -248,7 +326,7 @@ with tabs[0]:
             st.markdown(
                 """
                 <div class="feature-guidance">
-                    <span class="icon">📊</span>
+                    <span class="material-symbols-outlined">query_stats</span>
                     <strong>How to read this</strong>
                     <ul>
                         <li>Bars show average absolute impact on the prediction: longer bar ⇒ stronger influence.</li>
@@ -303,7 +381,7 @@ with tabs[2]:
             st.markdown(
                 """
                 <div class="feature-guidance">
-                    <span class="icon">🧭</span>
+                    <span class="material-symbols-outlined">explore</span>
                     <strong>Interpretation</strong>
                     <ul>
                         <li><b>X‑axis</b>: feature value; <b>Y‑axis</b>: contribution to prediction (↑ increases, ↓ decreases).</li>
@@ -346,7 +424,7 @@ with tabs[3]:
             X_ice = pd.DataFrame(np.tile(row.values, (grid_points, 1)), columns=X.columns)
             X_ice[feat] = grid
             y_ice = predict_function(mdl, X_ice)
-            fig_pdp.add_trace(go.Scatter(x=grid, y=y_ice, mode='lines', line=dict(width=1, color='rgba(255,255,255,0.25)'), showlegend=False))
+            fig_pdp.add_trace(go.Scatter(x=grid, y=y_ice, mode='lines', line=dict(width=1.2, color='rgba(255,255,255,0.35)'), showlegend=False))
 
         fig_pdp.update_layout(title=f"PDP/ICE for {feat}", xaxis_title=feat, yaxis_title="Model output",
                               paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
@@ -354,7 +432,7 @@ with tabs[3]:
         st.markdown(
             """
             <div class="feature-guidance">
-                <span class="icon">🧩</span>
+                <span class="material-symbols-outlined">splitscreen</span>
                 <strong>PDP vs ICE</strong>
                 <ul>
                     <li><b>PDP</b> (thick line): average effect of changing the feature while keeping others fixed at median.</li>

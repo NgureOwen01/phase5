@@ -1,18 +1,25 @@
 
 /* Import Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@300;400;500');
 
 /* Root variables for consistent theming */
 :root {
   --primary-color: #10b981;
   --secondary-color: #3b82f6;
   --accent-color: #8b5cf6;
+  --accent-color-2: #f59e0b;
   --success-color: #059669;
   --warning-color: #d97706;
   --error-color: #dc2626;
   --background-primary: #0f172a;
   --background-secondary: #1e293b;
   --background-tertiary: #334155;
+  /* Neutral palette for elevated surfaces */
+  --neutral-100: #0b1220;
+  --neutral-200: #111827;
+  --neutral-300: #1f2937;
+  --neutral-400: #374151;
   --text-primary: #ffffff;
   --text-secondary: #e2e8f0;
   --text-muted: #94a3b8;
@@ -27,6 +34,13 @@
   --radius-xl: 1rem;
   --nav-active-bg: rgba(16, 185, 129, 0.15);
   --nav-hover-bg: rgba(59, 130, 246, 0.1);
+  /* Density */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
 }
 
 /* Base app styling */
@@ -34,7 +48,24 @@
   background: linear-gradient(135deg, var(--background-primary) 0%, var(--background-secondary) 100%);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--text-primary);
+  line-height: 1.6;
 }
+
+/* Material Symbols for sidebar headings */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  font-size: 1.1rem;
+  line-height: 1;
+  vertical-align: -2px;
+  margin-right: 6px;
+}
+
+/* Typography refinement */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+code, pre, kbd, samp { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 /* Ensure Streamlit header and sidebar toggle remain visible */
 header { visibility: visible !important; }
@@ -52,7 +83,10 @@ header { visibility: visible !important; }
 
 /* Enhanced header */
 .main-header {
-  background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 50%, var(--accent-color) 100%);
+  background: linear-gradient(135deg, rgba(16,185,129,0.25) 0%, rgba(59,130,246,0.2) 50%, rgba(139,92,246,0.25) 100%),
+              radial-gradient(1200px 600px at 10% -10%, rgba(16,185,129,0.25), transparent 60%),
+              radial-gradient(1200px 600px at 110% 0%, rgba(59,130,246,0.15), transparent 60%),
+              linear-gradient(135deg, var(--neutral-200), var(--neutral-300));
   padding: 3rem 2rem;
   border-radius: var(--radius-xl);
   margin-bottom: 2rem;
@@ -137,7 +171,7 @@ header { visibility: visible !important; }
 
 /* Enhanced metric cards */
 .metric-card {
-  background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+  background: linear-gradient(160deg, rgba(16,185,129,0.85) 0%, rgba(59,130,246,0.9) 100%);
   border-radius: var(--radius-lg);
   padding: 1.5rem;
   color: white;
@@ -273,6 +307,13 @@ header { visibility: visible !important; }
 .stButton > button:hover {
   transform: translateY(-2px) !important;
   box-shadow: var(--shadow-lg) !important;
+}
+
+/* Focus ring for accessibility */
+button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid rgba(59,130,246,0.6) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.15) !important;
 }
 
 /* Sidebar styling: enforce consistent dark theme across Streamlit versions */
@@ -502,6 +543,8 @@ aside[aria-label="sidebar"] a:hover {
   overflow: hidden !important;
   box-shadow: var(--shadow-lg) !important;
 }
+.stDataFrame thead tr th { position: sticky; top: 0; background: rgba(15, 23, 42, 0.95); z-index: 2; }
+.stDataFrame tbody tr:nth-child(even) { background-color: rgba(148, 163, 184, 0.06); }
 
 /* Progress bar */
 .stProgress .st-bo {
@@ -716,3 +759,42 @@ aside[aria-label="sidebar"] [data-testid="stSidebarContent"],
 section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
   background: linear-gradient(180deg, var(--background-secondary) 0%, var(--background-tertiary) 100%) !important;
 }
+
+/* Hide any accidental blank cards/containers */
+.glass-card:empty,
+.glass-container:empty,
+.hs-card:empty,
+.metric-card:empty {
+  display: none !important;
+}
+
+/* Extra guard using :has for modern browsers */
+.glass-card:not(:has(*)),
+.glass-container:not(:has(*)),
+.hs-card:not(:has(*)),
+.metric-card:not(:has(*)) {
+  display: none !important;
+}
+.modern-form:empty {
+  display: none !important;
+}
+.modern-form:not(:has(*)) {
+  display: none !important;
+}
+
+/* Section divider */
+.section-divider {
+  display: flex; align-items: center; gap: 0.75rem; margin: 1.5rem 0; opacity: 0.85;
+}
+.section-divider::before, .section-divider::after {
+  content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+}
+.section-divider .label { font-size: 0.9rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+
+/* Grid helpers */
+.grid-12 { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1rem; }
+.grid-gap-tight { gap: 0.75rem; }
+
+/* Sidebar sticky labels */
+aside[data-testid="stSidebar"] .sticky-label { position: sticky; top: 0; padding: 0.5rem 0; background: linear-gradient(180deg, var(--background-secondary), transparent); z-index: 1; }
+

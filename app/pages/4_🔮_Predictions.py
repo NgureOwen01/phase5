@@ -17,6 +17,7 @@ if css:
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 st.title("🔮 Make Predictions")
+st.markdown('<div class="section-divider"><span class="label">Inputs • Confidence • Actions</span></div>', unsafe_allow_html=True)
 
 models = load_models()
 if not models:

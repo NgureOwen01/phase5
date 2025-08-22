@@ -10,19 +10,44 @@ try:
 except Exception:
     from utils import load_metrics, load_models, load_css  # type: ignore
 
-st.set_page_config(page_title="🤖 Model Performance", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Model Performance", page_icon=None, layout="wide")
 
 # Inject global CSS
 css = load_css()
 if css:
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    
+# Blur-to-focus text animation (reuse from main)
+blurtext_css = """
+.blur-reveal { display: inline-block; }
+.blur-reveal .w {
+  display: inline-block;
+  filter: blur(12px);
+  opacity: 0;
+  transform: translateY(0.4em);
+  animation: br-reveal 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  animation-delay: calc(var(--base, 0s) + (var(--i, 0) * var(--stagger, 0.06s)));
+}
+@keyframes br-reveal { to { filter: blur(0); opacity: 1; transform: translateY(0); } }
+"""
+st.markdown(f"<style>{blurtext_css}</style>", unsafe_allow_html=True)
 
-st.title("🤖 Model Performance Dashboard")
+st.markdown("""
+<div class="main-header">
+  <h1 style="margin-bottom:0.25rem;">
+    <span class="blur-reveal" style="--stagger:.06s; --base:.33s;">
+      <span class="w" style="--i:0">Model</span>
+      <span class="w" style="--i:1">Performance</span>
+      <span class="w" style="--i:2">Dashboard</span>
+    </span>
+  </h1>
+</div>
+""", unsafe_allow_html=True)
 st.markdown('<div class="section-divider"><span class="label">Compare • Evaluate • Select</span></div>', unsafe_allow_html=True)
 
 st.markdown("""
 <div class="content-intro">
-    <h4>📈 Comprehensive Model Analysis</h4>
+    <h4><span class="material-symbols-outlined">query_stats</span> Comprehensive Model Analysis</h4>
     <p>Compare machine learning models with detailed performance metrics, interactive visualizations, and comprehensive analytics. Identify the best performing models for your cropland classification tasks.</p>
     <p>💡 <strong>Metrics:</strong> Accuracy, F1-Score, and ROC-AUC provide different perspectives on model performance across various classification scenarios.</p>
 </div>
@@ -69,7 +94,7 @@ with tabs[0]:
     st.markdown(
         """
         <div class="feature-guidance">
-            <span class="icon">📊</span>
+            <span class="material-symbols-outlined">query_stats</span>
             <strong>How to read this:</strong>
             <ul>
                 <li><b>Accuracy</b>: Overall fraction of correct predictions. Simple but can be <i>misleading</i> on imbalanced data (e.g., many non‑cropland samples).</li>

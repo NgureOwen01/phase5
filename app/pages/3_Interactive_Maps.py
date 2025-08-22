@@ -1,4 +1,5 @@
 import streamlit as st
+import os
 import folium
 from streamlit_folium import st_folium
 import geopandas as gpd
@@ -9,20 +10,45 @@ try:
 except Exception:
     from utils import load_training_samples, load_css  # type: ignore
 
-st.set_page_config(page_title="🗺️ Interactive Maps", page_icon="🗺️", layout="wide")
+st.set_page_config(page_title="Interactive Maps", page_icon=None, layout="wide")
 
 # Inject global CSS
 css = load_css()
 if css:
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    
+# Blur-to-focus text animation (reuse)
+blurtext_css = """
+.blur-reveal { display: inline-block; }
+.blur-reveal .w {
+  display: inline-block;
+  filter: blur(12px);
+  opacity: 0;
+  transform: translateY(0.4em);
+  animation: br-reveal 0.9s cubic-bezier(0.2,  0.7, 0.2, 1) forwards;
+  animation-delay: calc(var(--base, 0s) + (var(--i, 0) * var(--stagger, 0.06s)));
+}
+@keyframes br-reveal { to { filter: blur(0); opacity: 1; transform: translateY(0); } }
+"""
+st.markdown(f"<style>{blurtext_css}</style>", unsafe_allow_html=True)
 
-st.title("🗺️ Interactive Cropland Maps")
+st.markdown("""
+<div class="main-header">
+  <h1 style="margin-bottom:0.25rem;">
+    <span class="blur-reveal" style="--stagger:.06s; --base:.33s;">
+      <span class="w" style="--i:0">Interactive</span>
+      <span class="w" style="--i:1">Cropland</span>
+      <span class="w" style="--i:2">Maps</span>
+    </span>
+  </h1>
+</div>
+""", unsafe_allow_html=True)
 st.markdown('<div class="section-divider"><span class="label">Layers • Context • Insight</span></div>', unsafe_allow_html=True)
 
 st.markdown(
     """
     <div class="content-intro">
-        <h4>🌍 Geospatial Data Visualization</h4>
+        <h4><span class=\"material-symbols-outlined\">map</span> Geospatial Data Visualization</h4>
         <p>Explore cropland training data on interactive maps with clustering and heatmaps. Click the map to get exact coordinates.</p>
     </div>
     """,
@@ -30,7 +56,7 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.subheader("🎛️ Map Controls")
+    st.markdown('<h3 class="sticky-label"><span class="material-symbols-outlined">tune</span> Map Controls</h3>', unsafe_allow_html=True)
     zoom = st.slider("Zoom", 2, 12, 5)
     basemap_label = st.selectbox(
         "Basemap",
@@ -97,7 +123,23 @@ with map_col:
     m = folium.Map(location=center, zoom_start=zoom, tiles=None, control_scale=True)
 
     # Add selected base layer using explicit URL and attribution
-    tiles_url, tiles_attr = TILE_SOURCES.get(basemap_label, TILE_SOURCES["OpenStreetMap"]) 
+    # Handle Stamen Terrain (Stadia Maps) API key requirement in production
+    if basemap_label == "Stamen Terrain":
+        api_key = os.getenv("STADIA_API_KEY") or os.getenv("STADIA_MAPS_API_KEY")
+        if api_key:
+            tiles_url = f"https://tiles.stadiamaps.com/tiles/stamen_terrain/{{z}}/{{x}}/{{y}}{{r}}.png?api_key={api_key}"
+            tiles_attr = (
+                "Tiles courtesy of Stadia Maps — Map tiles by Stamen Design, CC BY 3.0 — "
+                "Map data © OpenStreetMap contributors"
+            )
+        else:
+            st.warning(
+                "Stamen Terrain requires a Stadia Maps API key (set STADIA_API_KEY). "
+                "Falling back to CartoDB Positron."
+            )
+            tiles_url, tiles_attr = TILE_SOURCES.get("CartoDB Positron", TILE_SOURCES["OpenStreetMap"]) 
+    else:
+        tiles_url, tiles_attr = TILE_SOURCES.get(basemap_label, TILE_SOURCES["OpenStreetMap"]) 
     folium.TileLayer(tiles=tiles_url, name=basemap_label, attr=tiles_attr).add_to(m)
 
     # Fit to data bounds once per settings change

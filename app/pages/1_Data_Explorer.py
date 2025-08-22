@@ -1,4 +1,5 @@
 import streamlit as st
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -6,23 +7,154 @@ import plotly.graph_objects as go
 
 # Flexible import to support different working directories
 try:
-    from app.utils import load_training_samples, load_csv_sample, load_css
+    from app.utils import (
+        load_training_samples,
+        load_csv_sample,
+        load_css,
+        normalize_input_columns,
+        aggregate_s1,
+        aggregate_s2,
+        enrich_with_satellite_features,
+        augment_with_engineered_features,
+        get_feature_schema,
+        load_feature_defaults,
+        align_to_schema,
+    )
 except Exception:
-    from utils import load_training_samples, load_csv_sample, load_css  # type: ignore
+    from utils import (  # type: ignore
+        load_training_samples,
+        load_csv_sample,
+        load_css,
+        normalize_input_columns,
+        aggregate_s1,
+        aggregate_s2,
+        enrich_with_satellite_features,
+        augment_with_engineered_features,
+        get_feature_schema,
+        load_feature_defaults,
+        align_to_schema,
+    )
 
-st.set_page_config(page_title="📊 Data Explorer", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Data Explorer", page_icon=None, layout="wide")
 
 # Inject global CSS
 css = load_css()
 if css:
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    
+# Blur-to-focus text animation (same as main header)
+blurtext_css = """
+.blur-reveal { display: inline-block; }
+.blur-reveal .w {
+  display: inline-block;
+  filter: blur(12px);
+  opacity: 0;
+  transform: translateY(0.4em);
+  animation: br-reveal 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  animation-delay: calc(var(--base, 0s) + (var(--i, 0) * var(--stagger, 0.06s)));
+}
+@keyframes br-reveal { to { filter: blur(0); opacity: 1; transform: translateY(0); } }
+"""
+st.markdown(f"<style>{blurtext_css}</style>", unsafe_allow_html=True)
 
-st.title("📊 Data Explorer")
+st.markdown("""
+<div class="main-header">
+  <h1 style="margin-bottom:0.25rem;">
+    <span class="blur-reveal" style="--stagger:.06s; --base:.33s;">
+      <span class="w" style="--i:0">Data</span>
+      <span class="w" style="--i:1">Explorer</span>
+    </span>
+  </h1>
+</div>
+""", unsafe_allow_html=True)
 st.markdown('<div class="section-divider"><span class="label">Ingest • Explore • Export</span></div>', unsafe_allow_html=True)
+
+# Uploader and preprocessing pipeline
+with st.expander("Upload and preprocess your data (CSV + optional shapefile + Sentinel‑1/2)", expanded=False):
+    up_col1, up_col2 = st.columns(2)
+    with up_col1:
+        user_csv = st.file_uploader("Upload points CSV (require translated_lat, translated_lon)", type=["csv"], key="ux_points")
+        s1_csv = st.file_uploader("Optional: Sentinel‑1 CSV", type=["csv"], key="ux_s1")
+        s2_csv = st.file_uploader("Optional: Sentinel‑2 CSV", type=["csv"], key="ux_s2")
+    with up_col2:
+        shp_main = st.file_uploader("Optional: Shapefile (.shp)", type=["shp"], key="ux_shp")
+        shp_dbf = st.file_uploader("Optional: Shapefile DBF (.dbf)", type=["dbf"], key="ux_dbf")
+        shp_shx = st.file_uploader("Optional: Shapefile SHX (.shx)", type=["shx"], key="ux_shx")
+        shp_prj = st.file_uploader("Optional: Shapefile PRJ (.prj)", type=["prj"], key="ux_prj")
+
+    run_pre = st.button("Run preprocessing", type="primary")
+    pre_out = st.empty()
+    if run_pre:
+        try:
+            # 1) Base points
+            if user_csv is None:
+                st.error("Please upload a points CSV with translated_lat/translated_lon.")
+                st.stop()
+            pts = pd.read_csv(user_csv)
+            pts = normalize_input_columns(pts)
+            if not {'translated_lat','translated_lon'}.issubset(pts.columns):
+                st.error("CSV must contain translated_lat and translated_lon columns after normalization.")
+                st.stop()
+
+            # 2) Optional shapefile enrichment (nearest join for attributes)
+            if shp_main is not None:
+                try:
+                    import tempfile
+                    import geopandas as gpd
+                    with tempfile.TemporaryDirectory() as td:
+                        td = Path(td)
+                        (td / "upload.shp").write_bytes(shp_main.read())
+                        if shp_dbf: (td / "upload.dbf").write_bytes(shp_dbf.read())
+                        if shp_shx: (td / "upload.shx").write_bytes(shp_shx.read())
+                        if shp_prj: (td / "upload.prj").write_bytes(shp_prj.read())
+                        gdf = gpd.read_file(td / "upload.shp")
+                        if not gdf.empty and 'geometry' in gdf.columns:
+                            gdf = gdf.to_crs(epsg=4326)
+                            geo_pts = gpd.GeoDataFrame(pts, geometry=gpd.points_from_xy(pts['translated_lon'], pts['translated_lat']), crs='EPSG:4326')
+                            joined = gpd.sjoin_nearest(geo_pts, gdf, how='left')
+                            pts = pd.DataFrame(joined.drop(columns=['geometry','index_right'], errors='ignore'))
+                except Exception:
+                    pass
+
+            # 3) Build S1/S2 aggregates from uploads if provided
+            s1_agg = pd.DataFrame(); s2_agg = pd.DataFrame()
+            if s1_csv is not None:
+                try:
+                    s1_raw = pd.read_csv(s1_csv)
+                    s1_agg = aggregate_s1(s1_raw)
+                except Exception:
+                    pass
+            if s2_csv is not None:
+                try:
+                    s2_raw = pd.read_csv(s2_csv)
+                    s2_agg = aggregate_s2(s2_raw)
+                except Exception:
+                    pass
+
+            # 4) Enrich with satellite features
+            enriched = enrich_with_satellite_features(pts, s1_agg=s1_agg if not s1_agg.empty else None,
+                                                          s2_agg=s2_agg if not s2_agg.empty else None)
+
+            # 5) Engineer features and align to schema if available
+            feature_schema = get_feature_schema({})
+            engineered = augment_with_engineered_features(enriched, feature_schema)
+            if feature_schema:
+                defaults = load_feature_defaults(feature_schema)
+                X = align_to_schema(engineered, feature_schema, defaults)
+            else:
+                X = engineered.select_dtypes(include=[np.number]).copy()
+                X = X.loc[:, ~X.columns.duplicated()]
+
+            pre_out.success(f"Preprocessing complete: {len(X)} rows, {X.shape[1]} features")
+            st.dataframe(X.head(200), use_container_width=True)
+            csv_x = X.to_csv(index=False).encode('utf-8')
+            st.download_button("⬇️ Download preprocessed features (CSV)", data=csv_x, file_name="preprocessed_features.csv", mime="text/csv")
+        except Exception as e:
+            pre_out.error(f"Preprocessing failed: {e}")
 
 st.markdown("""
 <div class="content-intro">
-    <h4>🔍 Explore Your Agricultural Data</h4>
+    <h4><span class="material-symbols-outlined">search</span> Explore Your Agricultural Data</h4>
     <p>Dive deep into your cropland mapping datasets with interactive visualizations and statistical insights. Use the sidebar controls to filter and customize your analysis.</p>
     <p>💡 <strong>Features:</strong> Sample data for performance, visualize relationships, and export filtered datasets for further analysis.</p>
 </div>
@@ -78,7 +210,7 @@ num_data = data.select_dtypes(include=[np.number]).copy()
 if num_data.empty:
     st.markdown("""
     <div class="feature-guidance">
-        <span class="icon">📊</span>
+        <span class="material-symbols-outlined">insights</span>
         <strong>No Data Available:</strong> No numeric columns found in the selected datasets. Please check your data sources or adjust the filters in the sidebar.
     </div>
     """, unsafe_allow_html=True)
@@ -144,17 +276,17 @@ with tabs[0]:
         st.metric("Complete rows", f"{int(sampled.dropna().shape[0]):,}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.subheader("📋 Data Preview")
+    st.subheader("Data Preview")
     st.dataframe(sampled.head(200), use_container_width=True, height=360)
 
     st.markdown("""
     <div class="feature-guidance">
-        <span class="icon">💾</span>
+        <span class="material-symbols-outlined">download</span>
         <strong>Export Data:</strong> Download the current filtered and sampled dataset for external analysis or model training.
     </div>
     """, unsafe_allow_html=True)
     csv = sampled.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Download sampled data (CSV)", data=csv, file_name="data_sample.csv", mime="text/csv")
+    st.download_button("Download sampled data (CSV)", data=csv, file_name="data_sample.csv", mime="text/csv")
 
 with tabs[1]:
     st.subheader("Visualizations")
